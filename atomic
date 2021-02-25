@@ -1,0 +1,81 @@
+#!/bin/bash
+###############################################################################################
+#内核直接装于真正的根分区，其他包装于overlay upperdir. （隐患：如果发布内核有问题，有几率会导致系统起不来）
+#回滚flag设置:is_kernel_rollback初始为false，内核升级后为true;回滚及提交后为false
+#kernel存放: 初始kernel安装包存放于new_kernel, 升级后初始kernel安装包移动至
+#            old_kernel,new_kernel存放升级后内核安装包，回滚后old_kernel内
+#	     安装包重新移动至new_kernel, commit后删除old_kernel内安装包.
+#原根分区是只读的，但内核的升级与回滚均在原根分区进行，commit也是.
+###############################################################################################
+if [ `id -u` -gt 0 ]; then
+    exec sudo "$0" "$@"
+fi
+
+pkg_pool=`blkid -L pool`
+
+atomic_rollback ()
+{
+	umount $pkg_pool
+	mount $pkg_pool /mnt
+	if [ "`cat is_kernel_rollback`" == "true" ]
+	then
+		echo "false" > /mnt/is_kernel_rollback
+		echo "true" > /mnt/is_kernel_changed
+		umount /mnt
+		rootwork /overlay/lower rollback
+	fi
+	rm /overlay/upper/* -r
+	umount /mnt
+}
+atomic_update ()
+{
+	# 如果内核或者安装包安装报错如何处理？当前不是tmpfs，安装有问题的包重启也是无法解决的，只能清空upperdir
+	umount $pkg_pool
+	mount $pkg_pool /mnt
+	if [ "`apt list --upgradable|grep linux-image`" != "" ]
+	then
+		rm /mnt/new_kernel/*
+		for i in `apt list --upgradable |awk -F\/ '{print $1}'|awk 'NR > 1 {print $0}'`
+       		do
+                	if [ "`echo $i|grep linux-image`" != "" -o "`echo $i|grep linux-headers`" != "" ]
+                	then
+                	        echo "$i hold"|dpkg --set-selections
+                        	cd /mnt/new_kernel
+                        	apt download $i
+               		fi
+       		done
+		umount /mnt
+	else
+		DEBIAN_FRONTEND=noninteractive apt dist-upgrade -y
+		return
+	fi
+	echo "true" > /mnt/is_kernel_changed
+	echo "true" > /mnt/is_kernel_rollback
+       	rootwork /overlay/lower update
+	DEBIAN_FRONTEND=noninteractive apt dist-upgrade -y
+        #同步内核版本
+        old_version=`dpkg -l|grep linux-headers-deepin-amd64|awk -F\  '{print $3}'`
+        new_version=`apt-cache madison linux-headers-deepin-amd64|awk -F\  '{print $3}'`
+	sed -i "s/${old_version}/${new_version}/g" /usr/lib/dpkg-db/status
+
+}
+atomic_commit ()
+{
+	umount $pkg_pool
+	mount $pkg_pool /mnt
+	#rsync同步内容
+	echo "false" > /mnt/is_kernel_rollback
+	rm /mnt/old_kernel/*
+	mv /mnt/new_kernel/* /mnt/old_kernel
+	umount /mnt
+	rootwork /overlay/lower commit
+}
+case $1 in
+	"update") atomic_update ;;
+	"commit") atomic_commit ;;
+	"rollback") atomic_rollback ;;
+	*) echo "vaild input";;
+esac
+
+
+
