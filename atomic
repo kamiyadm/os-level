@@ -54,8 +54,8 @@ atomic_update ()
        	rootwork /overlay/lower update
 	DEBIAN_FRONTEND=noninteractive apt dist-upgrade -y
         #同步内核版本
-        old_version=`dpkg -l|grep linux-headers-deepin-amd64|awk -F\  '{print $3}'`
-        new_version=`apt-cache madison linux-headers-deepin-amd64|awk -F\  '{print $3}'`
+        old_version=`dpkg -l|grep linux-headers|awk -F\  '{print $3}'`
+        new_version=`apt-cache madison linux-headers|awk -F\  '{print $3}'`
 	sed -i "s/${old_version}/${new_version}/g" /usr/lib/dpkg-db/status
 
 }
